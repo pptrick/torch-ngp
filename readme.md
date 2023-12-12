@@ -1,5 +1,16 @@
 # torch-ngp
 
+```
+bug fix log from pptrick:
+- Must use c++17 on ubuntu 22.04, cuda 12.1
+- cuda 12.1 have bugs compiling torch pybind11 with c++ 17: https://github.com/pybind/pybind11/issues/4606
+
+update log from pptrick:
+- Change loss from MSE to Huber
+- By setting scale from 0.33 to 1.0, and bound from 2 to one, shrink the network and encoding grid size, training speed can be improved.
+- Store network weights as fp16 (Need to further check if any troubles caused)
+```
+
 This repository contains:
 * A pytorch implementation of the SDF and NeRF part (grid encoder, density grid ray sampler) in [instant-ngp](https://github.com/NVlabs/instant-ngp), as described in [_Instant Neural Graphics Primitives with a Multiresolution Hash Encoding_](https://nvlabs.github.io/instant-ngp/assets/mueller2022instant.pdf).
 * A pytorch implementation of [TensoRF](https://github.com/apchenstu/TensoRF), as described in [_TensoRF: Tensorial Radiance Fields_](https://arxiv.org/abs/2203.09517), adapted to instant-ngp's NeRF framework.

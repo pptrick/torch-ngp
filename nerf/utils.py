@@ -647,12 +647,15 @@ class Trainer(object):
 
             self.train_one_epoch(train_loader)
 
-            if self.workspace is not None and self.local_rank == 0:
-                self.save_checkpoint(full=True, best=False)
+            # if self.workspace is not None and self.local_rank == 0:
+            #     self.save_checkpoint(full=True, best=False)
 
-            if self.epoch % self.eval_interval == 0:
-                self.evaluate_one_epoch(valid_loader)
-                self.save_checkpoint(full=False, best=True)
+            # if self.epoch % self.eval_interval == 0:
+            #     self.evaluate_one_epoch(valid_loader)
+            #     self.save_checkpoint(full=False, best=True)
+            
+        if self.workspace is not None and self.local_rank == 0:
+            self.save_checkpoint(full=True, best=False)
 
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer.close()
@@ -1037,6 +1040,9 @@ class Trainer(object):
         if not best:
 
             state['model'] = self.model.state_dict()
+            for k in state['model']:
+                if state['model'][k].dtype == torch.float32:
+                    state['model'][k] = state['model'][k].to(torch.float16)
 
             file_path = f"{self.ckpt_path}/{name}.pth"
 

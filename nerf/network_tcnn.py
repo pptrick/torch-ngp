@@ -14,15 +14,16 @@ class NeRFNetwork(NeRFRenderer):
                  encoding="HashGrid",
                  encoding_dir="SphericalHarmonics",
                  num_layers=2,
-                 hidden_dim=64,
+                 hidden_dim=16,
                  geo_feat_dim=15,
-                 num_layers_color=3,
-                 hidden_dim_color=64,
+                 num_layers_color=2,
+                 hidden_dim_color=16,
                  bound=1,
                  **kwargs
                  ):
         super().__init__(bound, **kwargs)
 
+        print("[INFO] use tcnn nerf network!")
         # sigma network
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
@@ -34,16 +35,16 @@ class NeRFNetwork(NeRFRenderer):
             n_input_dims=3,
             encoding_config={
                 "otype": "HashGrid",
-                "n_levels": 16,
+                "n_levels": 8,
                 "n_features_per_level": 2,
-                "log2_hashmap_size": 19,
+                "log2_hashmap_size": 15,
                 "base_resolution": 16,
-                "per_level_scale": per_level_scale,
+                "per_level_scale": 2.0,
             },
         )
 
         self.sigma_net = tcnn.Network(
-            n_input_dims=32,
+            n_input_dims=16,
             n_output_dims=1 + self.geo_feat_dim,
             network_config={
                 "otype": "FullyFusedMLP",

@@ -357,6 +357,7 @@ class Trainer(object):
         self.use_tensorboardX = use_tensorboardX
         self.time_stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
         self.scheduler_update_every_step = scheduler_update_every_step
+        self.sparsity_loss_weight = opt.sparsity_loss_weight
         self.device = device if device is not None else torch.device(f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
         self.console = Console()
 
@@ -525,6 +526,11 @@ class Trainer(object):
 
             # LPIPS loss [not useful...]
             loss = loss + 1e-3 * self.criterion_lpips(pred_rgb, gt_rgb)
+            
+        # sparsity loss
+        if self.sparsity_loss_weight > 0:
+            sparsity_loss = outputs["sparsity_loss"]
+            loss += sparsity_loss * self.sparsity_loss_weight
 
         # special case for CCNeRF's rank-residual training
         if len(loss.shape) == 3: # [K, B, N]
@@ -712,8 +718,8 @@ class Trainer(object):
         if write_video:
             all_preds = np.stack(all_preds, axis=0)
             all_preds_depth = np.stack(all_preds_depth, axis=0)
-            imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=25, quality=8, macro_block_size=1)
-            imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=25, quality=8, macro_block_size=1)
+            imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=15, quality=8, macro_block_size=1)
+            imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=15, quality=8, macro_block_size=1)
 
         self.log(f"==> Finished Test.")
     
@@ -865,7 +871,7 @@ class Trainer(object):
 
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 preds, truths, loss = self.train_step(data)
-         
+
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -1068,6 +1074,9 @@ class Trainer(object):
                         self.ema.copy_to()
 
                     state['model'] = self.model.state_dict()
+                    for k in state['model']:
+                        if state['model'][k].dtype == torch.float32:
+                            state['model'][k] = state['model'][k].to(torch.float16)
 
                     # we don't consider continued training from the best ckpt, so we discard the unneeded density_grid to save some storage (especially important for dnerf)
                     if 'density_grid' in state['model']:

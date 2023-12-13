@@ -286,12 +286,17 @@ class NeRFRenderer(nn.Module):
             xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
 
             #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
+            xyzs.requires_grad = True
             
-            sigmas, rgbs = self(xyzs, dirs)
-            # density_outputs = self.density(xyzs) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
-            # sigmas = density_outputs['sigma']
-            # rgbs = self.color(xyzs, dirs, **density_outputs)
-            sigmas = self.density_scale * sigmas
+            density_outputs = self.density(xyzs) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
+            sigmas = density_outputs['sigma'] * self.density_scale
+            
+            # get normal
+            eps = 0.001
+            
+            rgbs = self.color(xyzs, dirs, **density_outputs)
+            # sigmas, rgbs = self(xyzs, dirs)
+            # sigmas = self.density_scale * sigmas
 
             #print(f'valid RGB query ratio: {mask.sum().item() / mask.shape[0]} (total = {mask.sum().item()})')
 
@@ -319,6 +324,7 @@ class NeRFRenderer(nn.Module):
                 depth = depth.view(*prefix)
             
             results['weights_sum'] = weights_sum
+            results['sparsity_loss'] = torch.mean(1-torch.exp(-sigmas * 0.1))
 
         else:
            

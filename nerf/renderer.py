@@ -290,11 +290,10 @@ class NeRFRenderer(nn.Module):
             
             density_outputs = self.density(xyzs) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
             sigmas = density_outputs['sigma'] * self.density_scale
-            
-            # get normal
-            eps = 0.001
-            
             rgbs = self.color(xyzs, dirs, **density_outputs)
+            
+            normals = self.compute_normal(xyzs)
+            
             # sigmas, rgbs = self(xyzs, dirs)
             # sigmas = self.density_scale * sigmas
 
@@ -316,10 +315,12 @@ class NeRFRenderer(nn.Module):
                 image = torch.stack(images, axis=0) # [K, B, N, 3]
 
             else:
-
+                _, _, normal = raymarching.composite_rays_train(sigmas, normals, deltas, rays, T_thresh)
                 weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays, T_thresh)
+                normal = normal + (1 - weights_sum).unsqueeze(-1) * bg_color
                 image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
                 depth = torch.clamp(depth - nears, min=0) / (fars - nears)
+                normal = image.view(*prefix, 3)
                 image = image.view(*prefix, 3)
                 depth = depth.view(*prefix)
             
@@ -337,6 +338,7 @@ class NeRFRenderer(nn.Module):
             weights_sum = torch.zeros(N, dtype=dtype, device=device)
             depth = torch.zeros(N, dtype=dtype, device=device)
             image = torch.zeros(N, 3, dtype=dtype, device=device)
+            normal = torch.zeros(N, 3, dtype=dtype, device=device)
             
             n_alive = N
             rays_alive = torch.arange(n_alive, dtype=torch.int32, device=device) # [N]
@@ -363,24 +365,42 @@ class NeRFRenderer(nn.Module):
                 # sigmas = density_outputs['sigma']
                 # rgbs = self.color(xyzs, dirs, **density_outputs)
                 sigmas = self.density_scale * sigmas
-
+                
+                # compute normal
+                normals = self.compute_normal(xyzs)
+                raymarching.composite_rays(n_alive, n_step, torch.clone(rays_alive), torch.clone(rays_t), sigmas, normals, deltas, torch.clone(weights_sum), torch.clone(depth), normal, T_thresh)
+                
                 raymarching.composite_rays(n_alive, n_step, rays_alive, rays_t, sigmas, rgbs, deltas, weights_sum, depth, image, T_thresh)
-
                 rays_alive = rays_alive[rays_alive >= 0]
 
                 #print(f'step = {step}, n_step = {n_step}, n_alive = {n_alive}, xyzs: {xyzs.shape}')
-
+                
                 step += n_step
 
             image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
-            depth = torch.clamp(depth - nears, min=0) / (fars - nears)
+            # depth = torch.clamp(depth - nears, min=0) / (fars - nears)
             image = image.view(*prefix, 3)
             depth = depth.view(*prefix)
         
         results['depth'] = depth
-        results['image'] = image
-
+        results['image'] = image # if self.training else (normal+1)/2
+        results['normal'] = normal
+        
         return results
+    
+    def compute_normal(self, xyzs, eps=0.005):
+        N = xyzs.size(0)
+        xyzs_concat = torch.concat([xyzs] * 6, dim=0)
+        offset = [1, -1, 1, -1, 1, -1]
+        axis = [0, 0, 1, 1, 2, 2]
+        for i in range(6):
+            xyzs_concat[N*i:N*(i+1), axis[i]] = xyzs[:, axis[i]] + eps * offset[i]
+        
+        sigmas_concat = self.density(xyzs_concat)['sigma'] * self.density_scale
+        sigmas_concat = torch.unsqueeze(sigmas_concat, dim=1)
+        normal = (torch.concat([sigmas_concat[i*2*N : (i*2+1)*N, :]-sigmas_concat[(i*2+1)*N: 2*(i+1)*N, :] for i in range(3)], axis=1)) / (2 * eps)
+        normal = normal / torch.norm(normal, dim=1).unsqueeze(dim=1)
+        return normal
 
     @torch.no_grad()
     def mark_untrained_grid(self, poses, intrinsic, S=64):

@@ -284,7 +284,6 @@ class NeRFRenderer(nn.Module):
             self.local_step += 1
 
             xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
-
             #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
             xyzs.requires_grad = True
             
@@ -320,7 +319,7 @@ class NeRFRenderer(nn.Module):
                 normal = normal + (1 - weights_sum).unsqueeze(-1) * bg_color
                 image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
                 depth = torch.clamp(depth - nears, min=0) / (fars - nears)
-                normal = image.view(*prefix, 3)
+                normal = normal.view(*prefix, 3)
                 image = image.view(*prefix, 3)
                 depth = depth.view(*prefix)
             
@@ -378,7 +377,7 @@ class NeRFRenderer(nn.Module):
                 step += n_step
 
             image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
-            # depth = torch.clamp(depth - nears, min=0) / (fars - nears)
+            depth = torch.clamp(depth - nears, min=0) / (fars - nears)
             image = image.view(*prefix, 3)
             depth = depth.view(*prefix)
         

@@ -615,8 +615,9 @@ class Trainer(object):
 
         pred_rgb = outputs['image'].reshape(-1, H, W, 3)
         pred_depth = outputs['depth'].reshape(-1, H, W)
+        pred_normal = outputs['normal'].reshape(-1, H, W, 3)
 
-        return pred_rgb, pred_depth
+        return pred_rgb, pred_depth, pred_normal
 
 
     def save_mesh(self, save_path=None, resolution=256, threshold=10):
@@ -695,13 +696,14 @@ class Trainer(object):
         if write_video:
             all_preds = []
             all_preds_depth = []
+            all_preds_normal = []
 
         with torch.no_grad():
 
             for i, data in enumerate(loader):
                 
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    preds, preds_depth = self.test_step(data)
+                    preds, preds_depth, preds_normal = self.test_step(data)
 
                 if self.opt.color_space == 'linear':
                     preds = linear_to_srgb(preds)
@@ -711,10 +713,14 @@ class Trainer(object):
 
                 pred_depth = preds_depth[0].detach().cpu().numpy()
                 pred_depth = (pred_depth * 255).astype(np.uint8)
+                
+                pred_normal = preds_normal[0].detach().cpu().numpy()
+                pred_normal = ((pred_normal+1)/2 * 255).astype(np.uint8)
 
                 if write_video:
                     all_preds.append(pred)
                     all_preds_depth.append(pred_depth)
+                    all_preds_normal.append(pred_normal)
                 else:
                     cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_rgb.png'), cv2.cvtColor(pred, cv2.COLOR_RGB2BGR))
                     cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_depth.png'), pred_depth)
@@ -724,8 +730,10 @@ class Trainer(object):
         if write_video:
             all_preds = np.stack(all_preds, axis=0)
             all_preds_depth = np.stack(all_preds_depth, axis=0)
+            all_preds_normal = np.stack(all_preds_normal, axis=0)
             imageio.mimwrite(os.path.join(save_path, f'{name}_rgb.mp4'), all_preds, fps=15, quality=8, macro_block_size=1)
             imageio.mimwrite(os.path.join(save_path, f'{name}_depth.mp4'), all_preds_depth, fps=15, quality=8, macro_block_size=1)
+            imageio.mimwrite(os.path.join(save_path, f'{name}_normal.mp4'), all_preds_normal, fps=15, quality=8, macro_block_size=1)
 
         self.log(f"==> Finished Test.")
     
@@ -819,7 +827,7 @@ class Trainer(object):
         with torch.no_grad():
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 # here spp is used as perturb random seed! (but not perturb the first sample)
-                preds, preds_depth = self.test_step(data, bg_color=bg_color, perturb=False if spp == 1 else spp)
+                preds, preds_depth, pred_normal = self.test_step(data, bg_color=bg_color, perturb=False if spp == 1 else spp)
 
         if self.ema is not None:
             self.ema.restore()

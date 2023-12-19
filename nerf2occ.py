@@ -49,7 +49,7 @@ class NeRF2Occ:
         grid_size = 64,
         sample_interval = 8 # if grid_size set to 64, max value of sample_interval should be 16
     ):
-        bound = 1.0
+        bound = 0.4
         # sample points
         gsize = grid_size*sample_interval
         Y = (torch.arange(gsize, dtype=torch.float32, device=self.device)/(gsize) - 0.5) * (2 * bound)

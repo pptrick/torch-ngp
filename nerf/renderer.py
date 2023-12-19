@@ -382,7 +382,7 @@ class NeRFRenderer(nn.Module):
             depth = depth.view(*prefix)
         
         results['depth'] = depth
-        results['image'] = image # if self.training else (normal+1)/2
+        results['image'] = image
         results['normal'] = normal
         
         return results

@@ -515,6 +515,12 @@ class Trainer(object):
 
         # MSE loss
         loss = self.criterion(pred_rgb, gt_rgb).mean(-1) # [B, N, 3] --> [B, N]
+        
+        # normal loss
+        if 'normals' in data and self.epoch > 5:
+            gt_normal = data['normals'] * images[..., 3:] + bg_color * (1 - images[..., 3:])
+            pred_normal = outputs['normal']
+            loss += 0.2 * self.criterion(pred_normal, gt_normal).mean(-1) # [B, N, 3] --> [B, N]
 
         # patch-based rendering
         if self.opt.patch_size > 1:

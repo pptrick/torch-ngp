@@ -162,6 +162,9 @@ class NeRFDataset:
         frames = transform["frames"]
         #frames = sorted(frames, key=lambda d: d['file_path']) # why do I sort...
         
+        # load normals and depths
+        self.load_normal_depth()
+        
         # for colmap, manually interpolate a test set.
         if self.mode == 'colmap' and type == 'test':
             # choose two random poses, and interpolate between.
@@ -181,24 +184,30 @@ class NeRFDataset:
             #     self.poses.append(pose)
             
             # New way for testing: interpolate between two frames from the training dataset
+            # self.poses = []
+            # self.images = None
+            # for i in range(len(frames)):
+            #     pose0 = nerf_matrix_to_ngp(np.array(frames[i]['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
+            #     pose1 = nerf_matrix_to_ngp(np.array(frames[(i+1)%len(frames)]['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
+            #     rots = Rotation.from_matrix(np.stack([pose0[:3, :3], pose1[:3, :3]]))
+            #     slerp = Slerp([0, 1], rots)
+            #     pose_m = np.eye(4, dtype=np.float32)
+            #     pose_m[:3, :3] = slerp(0.5).as_matrix()
+            #     pose_m[:3, 3] = 0.5 * pose0[:3, 3] + 0.5 * pose1[:3, 3]
+            #     self.poses.append(pose0)
+            #     self.poses.append(pose_m)
+            
             self.poses = []
             self.images = None
             for i in range(len(frames)):
                 pose0 = nerf_matrix_to_ngp(np.array(frames[i]['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
-                pose1 = nerf_matrix_to_ngp(np.array(frames[(i+1)%len(frames)]['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
-                rots = Rotation.from_matrix(np.stack([pose0[:3, :3], pose1[:3, :3]]))
-                slerp = Slerp([0, 1], rots)
-                pose_m = np.eye(4, dtype=np.float32)
-                pose_m[:3, :3] = slerp(0.5).as_matrix()
-                pose_m[:3, 3] = 0.5 * pose0[:3, 3] + 0.5 * pose1[:3, 3]
                 self.poses.append(pose0)
-                self.poses.append(pose_m)
 
         else:
             # for colmap, manually split a valid set (the first frame).
             if self.mode == 'colmap':
                 if type == 'train':
-                    frames = frames[1:]
+                    frames = frames[0:]
                 elif type == 'val':
                     frames = frames[:1]
                 # else 'all' or 'trainval' : use all frames
@@ -235,7 +244,7 @@ class NeRFDataset:
 
                 self.poses.append(pose)
                 self.images.append(image)
-            
+        
         self.poses = torch.from_numpy(np.stack(self.poses, axis=0)) # [N, 4, 4]
         if self.images is not None:
             self.images = torch.from_numpy(np.stack(self.images, axis=0)) # [N, H, W, C]
@@ -267,6 +276,9 @@ class NeRFDataset:
                 self.images = self.images.to(dtype).to(self.device)
             if self.error_map is not None:
                 self.error_map = self.error_map.to(self.device)
+            if self.normals is not None and self.depths is not None:
+                self.normals = self.normals.to(self.device)
+                self.depths = self.depths.to(self.device)
 
         # load intrinsics
         if 'fl_x' in transform or 'fl_y' in transform:
@@ -285,6 +297,22 @@ class NeRFDataset:
         cy = (transform['cy'] / downscale) if 'cy' in transform else (self.H / 2)
     
         self.intrinsics = np.array([fl_x, fl_y, cx, cy])
+        
+    def load_normal_depth(self):
+        arr_path = os.path.join(self.root_path, "aovs.npz")
+        self.normals = None
+        self.depths = None
+        if os.path.exists(arr_path): # and self.training:
+            arr = np.load(arr_path)
+            normals = arr["normals"]
+            depths = arr["depths"]
+            # TODO: add transformations here
+            normals[:, :, :, 1] *= -1
+            normals[:, :, :, [0, 2]] = normals[:, :, :, [2, 0]]
+            normals[:, :, :, 2] *= -1
+
+            self.normals = torch.from_numpy(normals)
+            self.depths = torch.from_numpy(depths)
 
 
     def collate(self, index):
@@ -327,6 +355,20 @@ class NeRFDataset:
                 C = images.shape[-1]
                 images = torch.gather(images.view(B, -1, C), 1, torch.stack(C * [rays['inds']], -1)) # [B, N, 3/4]
             results['images'] = images
+            
+        if self.normals is not None:
+            normals = self.normals[index].to(self.device) # [B, H, W, 3]
+            if self.training:
+                C = normals.shape[-1]
+                normals = torch.gather(normals.view(B, -1, C), 1, torch.stack(C * [rays['inds']], -1)) # [B, N, 3]
+            results['normals'] = normals
+            
+        if self.depths is not None:
+            depths = self.depths[index].to(self.device) # [B, H, W, 1]
+            if self.training:
+                C = depths.shape[-1]
+                depths = torch.gather(depths.view(B, -1, C), 1, torch.stack(C * [rays['inds']], -1)) # [B, N, 1]
+            results['depths'] = depths
         
         # need inds to update error_map
         if error_map is not None:

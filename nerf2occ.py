@@ -46,14 +46,15 @@ class NeRF2Occ:
     @torch.no_grad      
     def run(
         self,
-        grid_size = 128,
-        sample_interval = 2
+        grid_size = 64,
+        sample_interval = 8 # if grid_size set to 64, max value of sample_interval should be 16
     ):
+        bound = 1.0
         # sample points
         gsize = grid_size*sample_interval
-        X = torch.arange(gsize, dtype=torch.float32, device=self.device)/(0.5 * gsize) - 1.0
-        Y = torch.arange(gsize, dtype=torch.float32, device=self.device)/(0.5 * gsize) - 1.0
-        Z = torch.arange(gsize, dtype=torch.float32, device=self.device)/(0.5 * gsize) - 1.0
+        Y = (torch.arange(gsize, dtype=torch.float32, device=self.device)/(gsize) - 0.5) * (2 * bound)
+        Z = (torch.arange(gsize, dtype=torch.float32, device=self.device)/(gsize) - 0.5) * (2 * bound)
+        X = (torch.arange(gsize, dtype=torch.float32, device=self.device)/(gsize) - 0.5) * (2 * bound)
         points = torch.concat([t.unsqueeze(dim=3) for t in torch.meshgrid(X, Y, Z, indexing='ij')], dim=3)
         # get density (sigma and alpha)
         points = points.view(-1, 3)
@@ -65,9 +66,13 @@ class NeRF2Occ:
         alphas = F.max_pool3d(alphas, kernel_size=sample_interval, stride=sample_interval)
         alphas = alphas.view(grid_size, grid_size, grid_size)
         # occupancy thresholding
-        thres = 0.7
-        alphas[alphas > thres] = 1
-        alphas[alphas <= thres] = 0
+        thres = 0.3
+        if thres < 1:
+            alphas[alphas > thres] = 1
+            alphas[alphas <= thres] = 0
+        else:
+            alphas[alphas < thres] = 0
+            alphas[alphas >= thres] = 1
         mesh = voxel2mesh(alphas.cpu().numpy())
         mesh.export("test.obj")
         

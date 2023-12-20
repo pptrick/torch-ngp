@@ -222,8 +222,7 @@ class NeRFRenderer(nn.Module):
         weights_sum = weights.sum(dim=-1) # [N]
         
         # calculate depth 
-        ori_z_vals = ((z_vals - nears) / (fars - nears)).clamp(0, 1)
-        depth = torch.sum(weights * ori_z_vals, dim=-1)
+        depth = torch.sum(weights * z_vals, dim=-1)
 
         # calculate color
         image = torch.sum(weights.unsqueeze(-1) * rgbs, dim=-2) # [N, 3], in [0, 1]
@@ -283,7 +282,7 @@ class NeRFRenderer(nn.Module):
             counter.zero_() # set to 0
             self.local_step += 1
 
-            xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
+            xyzs, dirs, deltas, rays, t0s = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
             #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
             xyzs.requires_grad = True
             
@@ -300,25 +299,15 @@ class NeRFRenderer(nn.Module):
 
             # special case for CCNeRF's residual learning
             if len(sigmas.shape) == 2:
-                K = sigmas.shape[0]
-                depths = []
-                images = []
-                for k in range(K):
-                    weights_sum, depth, image = raymarching.composite_rays_train(sigmas[k], rgbs[k], deltas, rays, T_thresh)
-                    image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
-                    depth = torch.clamp(depth - nears, min=0) / (fars - nears)
-                    images.append(image.view(*prefix, 3))
-                    depths.append(depth.view(*prefix))
-            
-                depth = torch.stack(depths, axis=0) # [K, B, N]
-                image = torch.stack(images, axis=0) # [K, B, N, 3]
+                print("[Error] Uncaughted situation!")
+                exit()
 
             else:
-                _, _, normal = raymarching.composite_rays_train(sigmas, normals, deltas, rays, T_thresh)
-                weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays, T_thresh)
+                _, _, normal = raymarching.composite_rays_train(sigmas, normals, deltas, rays, t0s, T_thresh)
+                weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays, t0s, T_thresh)
                 normal = normal + (1 - weights_sum).unsqueeze(-1) * bg_color
                 image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
-                depth = torch.clamp(depth - nears, min=0) / (fars - nears)
+                depth = torch.clamp(depth, min=0) # + (1 - weights_sum) * bg_color[:, :, 0]
                 normal = normal.view(*prefix, 3)
                 image = image.view(*prefix, 3)
                 depth = depth.view(*prefix)
@@ -377,7 +366,6 @@ class NeRFRenderer(nn.Module):
                 step += n_step
 
             image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
-            depth = torch.clamp(depth - nears, min=0) / (fars - nears)
             image = image.view(*prefix, 3)
             depth = depth.view(*prefix)
         
@@ -404,7 +392,7 @@ class NeRFRenderer(nn.Module):
     @torch.no_grad()
     def mark_untrained_grid(self, poses, intrinsic, S=64):
         # poses: [B, 4, 4]
-        # intrinsic: [3, 3]
+        # intrinsic: [B, 4]
 
         if not self.cuda_ray:
             return
@@ -414,7 +402,7 @@ class NeRFRenderer(nn.Module):
 
         B = poses.shape[0]
         
-        fx, fy, cx, cy = intrinsic
+        fx, fy, cx, cy = intrinsic[:, 0], intrinsic[:, 1], intrinsic[:, 2], intrinsic[:, 3]
         
         X = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
         Y = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
@@ -453,8 +441,8 @@ class NeRFRenderer(nn.Module):
                             
                             # query if point is covered by any camera
                             mask_z = cam_xyzs[:, :, 2] > 0 # [S, N]
-                            mask_x = torch.abs(cam_xyzs[:, :, 0]) < cx / fx * cam_xyzs[:, :, 2] + half_grid_size * 2
-                            mask_y = torch.abs(cam_xyzs[:, :, 1]) < cy / fy * cam_xyzs[:, :, 2] + half_grid_size * 2
+                            mask_x = torch.abs(cam_xyzs[:, :, 0]) < cx[head:tail].unsqueeze(-1) / fx[head:tail].unsqueeze(-1) * cam_xyzs[:, :, 2] + half_grid_size * 2
+                            mask_y = torch.abs(cam_xyzs[:, :, 1]) < cy[head:tail].unsqueeze(-1) / fy[head:tail].unsqueeze(-1) * cam_xyzs[:, :, 2] + half_grid_size * 2
                             mask = (mask_z & mask_x & mask_y).sum(0).reshape(-1) # [N]
 
                             # update count 

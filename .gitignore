@@ -8,6 +8,7 @@ data*
 data/
 trial*/
 .vs/
+*.obj
 
 #**dnerf*
 #dnerf/

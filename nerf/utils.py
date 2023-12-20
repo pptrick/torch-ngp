@@ -55,7 +55,7 @@ def get_rays(poses, intrinsics, H, W, N=-1, error_map=None, patch_size=1):
     ''' get rays
     Args:
         poses: [B, 4, 4], cam2world
-        intrinsics: [4]
+        intrinsics: [B, 4]
         H, W, N: int
         error_map: [B, 128 * 128], sample probability based on training error
     Returns:
@@ -65,7 +65,7 @@ def get_rays(poses, intrinsics, H, W, N=-1, error_map=None, patch_size=1):
 
     device = poses.device
     B = poses.shape[0]
-    fx, fy, cx, cy = intrinsics
+    fx, fy, cx, cy = intrinsics[:, 0], intrinsics[:, 1], intrinsics[:, 2], intrinsics[:, 3]
 
     i, j = custom_meshgrid(torch.linspace(0, W-1, W, device=device), torch.linspace(0, H-1, H, device=device)) # float
     i = i.t().reshape([1, H*W]).expand([B, H*W]) + 0.5
@@ -517,10 +517,17 @@ class Trainer(object):
         loss = self.criterion(pred_rgb, gt_rgb).mean(-1) # [B, N, 3] --> [B, N]
         
         # normal loss
-        if 'normals' in data and self.epoch > 5:
+        if 'normals' in data and self.epoch > 7:
             gt_normal = data['normals'] * images[..., 3:] + bg_color * (1 - images[..., 3:])
             pred_normal = outputs['normal']
             loss += 0.2 * self.criterion(pred_normal, gt_normal).mean(-1) # [B, N, 3] --> [B, N]
+            
+        # depth loss
+        if 'depths' in data and self.epoch < 8:
+            gt_depth = data['depths'] * images[..., 3:]# + bg_color[:, :, :1] * (1 - images[..., 3:])
+            pred_depth = outputs['depth'].view(gt_depth.size())
+            depth_loss = 0.2 * self.criterion(pred_depth, gt_depth).mean(-1) # [B, N, 1] --> [B, N]
+            loss += depth_loss
 
         # patch-based rendering
         if self.opt.patch_size > 1:
@@ -615,7 +622,7 @@ class Trainer(object):
 
         pred_rgb = outputs['image'].reshape(-1, H, W, 3)
         pred_depth = outputs['depth'].reshape(-1, H, W)
-        pred_normal = outputs['normal'].reshape(-1, H, W, 3)
+        pred_normal = outputs['normal'].reshape(-1, H, W, 3) if 'normal' in outputs else outputs['image'].reshape(-1, H, W, 3)
 
         return pred_rgb, pred_depth, pred_normal
 
@@ -712,11 +719,11 @@ class Trainer(object):
                 pred = (pred * 255).astype(np.uint8)
 
                 pred_depth = preds_depth[0].detach().cpu().numpy()
-                pred_depth = (pred_depth * 255).astype(np.uint8)
+                pred_depth = (pred_depth * 255 / 6.0).astype(np.uint8)
                 
                 pred_normal = preds_normal[0].detach().cpu().numpy()
                 pred_normal = ((pred_normal+1)/2 * 255).astype(np.uint8)
-
+                
                 if write_video:
                     all_preds.append(pred)
                     all_preds_depth.append(pred_depth)

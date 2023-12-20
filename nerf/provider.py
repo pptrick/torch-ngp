@@ -167,41 +167,22 @@ class NeRFDataset:
         
         # for colmap, manually interpolate a test set.
         if self.mode == 'colmap' and type == 'test':
-            # choose two random poses, and interpolate between.
-            # f0, f1 = np.random.choice(frames, 2, replace=False)
-            # pose0 = nerf_matrix_to_ngp(np.array(f0['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
-            # pose1 = nerf_matrix_to_ngp(np.array(f1['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
-            # rots = Rotation.from_matrix(np.stack([pose0[:3, :3], pose1[:3, :3]]))
-            # slerp = Slerp([0, 1], rots)
-
-            # self.poses = []
-            # self.images = None
-            # for i in range(n_test + 1):
-            #     ratio = np.sin(((i / n_test) - 0.5) * np.pi) * 0.5 + 0.5
-            #     pose = np.eye(4, dtype=np.float32)
-            #     pose[:3, :3] = slerp(ratio).as_matrix()
-            #     pose[:3, 3] = (1 - ratio) * pose0[:3, 3] + ratio * pose1[:3, 3]
-            #     self.poses.append(pose)
-            
             # New way for testing: interpolate between two frames from the training dataset
-            # self.poses = []
-            # self.images = None
-            # for i in range(len(frames)):
-            #     pose0 = nerf_matrix_to_ngp(np.array(frames[i]['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
-            #     pose1 = nerf_matrix_to_ngp(np.array(frames[(i+1)%len(frames)]['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
-            #     rots = Rotation.from_matrix(np.stack([pose0[:3, :3], pose1[:3, :3]]))
-            #     slerp = Slerp([0, 1], rots)
-            #     pose_m = np.eye(4, dtype=np.float32)
-            #     pose_m[:3, :3] = slerp(0.5).as_matrix()
-            #     pose_m[:3, 3] = 0.5 * pose0[:3, 3] + 0.5 * pose1[:3, 3]
-            #     self.poses.append(pose0)
-            #     self.poses.append(pose_m)
-            
             self.poses = []
+            self.intrinsics = []
             self.images = None
             for i in range(len(frames)):
                 pose0 = nerf_matrix_to_ngp(np.array(frames[i]['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
+                # pose1 = nerf_matrix_to_ngp(np.array(frames[(i+1)%len(frames)]['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
+                # rots = Rotation.from_matrix(np.stack([pose0[:3, :3], pose1[:3, :3]]))
+                # slerp = Slerp([0, 1], rots)
+                # pose_m = np.eye(4, dtype=np.float32)
+                # pose_m[:3, :3] = slerp(0.5).as_matrix()
+                # pose_m[:3, 3] = 0.5 * pose0[:3, 3] + 0.5 * pose1[:3, 3]
                 self.poses.append(pose0)
+                # self.poses.append(pose_m)
+                self.intrinsics.append(self.load_intrinsics(transform, frames[i]))
+                # self.intrinsics.append(self.load_intrinsics(transform, frames[i]))
 
         else:
             # for colmap, manually split a valid set (the first frame).
@@ -214,6 +195,7 @@ class NeRFDataset:
             
             self.poses = []
             self.images = []
+            self.intrinsics = []
             for f in tqdm.tqdm(frames, desc=f'Loading {type} data'):
                 f_path = os.path.join(self.root_path, f['file_path'])
                 if self.mode == 'blender' and '.' not in os.path.basename(f_path):
@@ -244,8 +226,10 @@ class NeRFDataset:
 
                 self.poses.append(pose)
                 self.images.append(image)
+                self.intrinsics.append(self.load_intrinsics(transform, f))
         
-        self.poses = torch.from_numpy(np.stack(self.poses, axis=0)) # [N, 4, 4]
+        self.intrinsics = torch.from_numpy(np.stack(self.intrinsics, axis=0)) # [N, 4, 4]
+        self.poses = torch.from_numpy(np.stack(self.poses, axis=0)) # [N, 4]
         if self.images is not None:
             self.images = torch.from_numpy(np.stack(self.images, axis=0)) # [N, H, W, C]
         
@@ -259,13 +243,8 @@ class NeRFDataset:
         else:
             self.error_map = None
 
-        # [debug] uncomment to view all training poses.
-        # visualize_poses(self.poses.numpy())
-
-        # [debug] uncomment to view examples of randomly generated poses.
-        # visualize_poses(rand_poses(100, self.device, radius=self.radius).cpu().numpy())
-
         if self.preload:
+            self.intrinsics = self.intrinsics.to(self.device)
             self.poses = self.poses.to(self.device)
             if self.images is not None:
                 # TODO: linear use pow, but pow for half is only available for torch >= 1.10 ?
@@ -279,9 +258,18 @@ class NeRFDataset:
             if self.normals is not None and self.depths is not None:
                 self.normals = self.normals.to(self.device)
                 self.depths = self.depths.to(self.device)
-
-        # load intrinsics
-        if 'fl_x' in transform or 'fl_y' in transform:
+        
+    def load_intrinsics(self, transform = {}, frame = {}, downscale=1):
+        if 'fl_x' in frame or 'fl_y' in frame:
+            fl_x = (frame['fl_x'] if 'fl_x' in frame else frame['fl_y']) / downscale
+            fl_y = (frame['fl_y'] if 'fl_y' in frame else frame['fl_x']) / downscale
+        elif 'camera_angle_x' in frame or 'camera_angle_y' in frame:
+            # blender, assert in radians. already downscaled since we use H/W
+            fl_x = self.W / (2 * np.tan(frame['camera_angle_x'] / 2)) if 'camera_angle_x' in frame else None
+            fl_y = self.H / (2 * np.tan(frame['camera_angle_y'] / 2)) if 'camera_angle_y' in frame else None
+            if fl_x is None: fl_x = fl_y
+            if fl_y is None: fl_y = fl_x
+        elif 'fl_x' in transform or 'fl_y' in transform:
             fl_x = (transform['fl_x'] if 'fl_x' in transform else transform['fl_y']) / downscale
             fl_y = (transform['fl_y'] if 'fl_y' in transform else transform['fl_x']) / downscale
         elif 'camera_angle_x' in transform or 'camera_angle_y' in transform:
@@ -292,11 +280,18 @@ class NeRFDataset:
             if fl_y is None: fl_y = fl_x
         else:
             raise RuntimeError('Failed to load focal length, please check the transforms.json!')
-
-        cx = (transform['cx'] / downscale) if 'cx' in transform else (self.W / 2)
-        cy = (transform['cy'] / downscale) if 'cy' in transform else (self.H / 2)
-    
-        self.intrinsics = np.array([fl_x, fl_y, cx, cy])
+        
+        if 'cx' in frame and 'cy' in frame:
+            cx = (frame['cx'] / downscale)
+            cy = (frame['cy'] / downscale)
+        elif 'cx' in transform and 'cy' in transform:
+            cx = (transform['cx'] / downscale)
+            cy = (transform['cy'] / downscale)
+        else:
+            cx = self.W / 2
+            cy = self.H / 2
+            
+        return np.array([fl_x, fl_y, cx, cy], dtype=np.float32)
         
     def load_normal_depth(self):
         arr_path = os.path.join(self.root_path, "aovs.npz")
@@ -327,7 +322,7 @@ class NeRFDataset:
             # sample a low-resolution but full image for CLIP
             s = np.sqrt(self.H * self.W / self.num_rays) # only in training, assert num_rays > 0
             rH, rW = int(self.H / s), int(self.W / s)
-            rays = get_rays(poses, self.intrinsics / s, rH, rW, -1)
+            rays = get_rays(poses, self.intrinsics[torch.zeros_like(index)] / s, rH, rW, -1)
 
             return {
                 'H': rH,
@@ -337,10 +332,11 @@ class NeRFDataset:
             }
 
         poses = self.poses[index].to(self.device) # [B, 4, 4]
+        intrinsics = self.intrinsics[index].to(self.device) # [B, 4]
 
         error_map = None if self.error_map is None else self.error_map[index]
         
-        rays = get_rays(poses, self.intrinsics, self.H, self.W, self.num_rays, error_map, self.opt.patch_size)
+        rays = get_rays(poses, intrinsics, self.H, self.W, self.num_rays, error_map, self.opt.patch_size)
 
         results = {
             'H': self.H,

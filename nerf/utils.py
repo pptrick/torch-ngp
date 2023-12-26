@@ -335,7 +335,7 @@ class Trainer(object):
                  use_loss_as_metric=True, # use loss as the first metric
                  report_metric_at_train=False, # also report metrics at training
                  use_checkpoint="latest", # which ckpt to use at init time
-                 use_tensorboardX=True, # whether to use tensorboard for logging
+                 use_tensorboardX=False, # whether to use tensorboard for logging
                  scheduler_update_every_step=False, # whether to call scheduler.step() after every train step
                  ):
         
@@ -416,7 +416,8 @@ class Trainer(object):
             self.log_path = os.path.join(workspace, f"log_{self.name}.txt")
             self.log_ptr = open(self.log_path, "a+")
 
-            self.ckpt_path = os.path.join(self.workspace, 'checkpoints')
+            # self.ckpt_path = os.path.join(self.workspace, 'checkpoints')
+            self.ckpt_path = self.workspace
             self.best_path = f"{self.ckpt_path}/{self.name}.pth"
             os.makedirs(self.ckpt_path, exist_ok=True)
             
@@ -494,6 +495,9 @@ class Trainer(object):
 
         if self.opt.color_space == 'linear':
             images[..., :3] = srgb_to_linear(images[..., :3])
+            
+        alpha_mask = images[..., 3:]
+        alpha_mask = (alpha_mask > 0).to(alpha_mask.dtype)
 
         if C == 3 or self.model.bg_radius > 0:
             bg_color = 1
@@ -504,7 +508,7 @@ class Trainer(object):
             bg_color = torch.rand_like(images[..., :3]) # [N, 3], pixel-wise random.
 
         if C == 4:
-            gt_rgb = images[..., :3] * images[..., 3:] + bg_color * (1 - images[..., 3:])
+            gt_rgb = images[..., :3] * alpha_mask + bg_color * (1 - alpha_mask)
         else:
             gt_rgb = images
 
@@ -517,14 +521,14 @@ class Trainer(object):
         loss = self.criterion(pred_rgb, gt_rgb).mean(-1) # [B, N, 3] --> [B, N]
         
         # normal loss
-        if 'normals' in data and self.epoch > 7:
-            gt_normal = data['normals'] * images[..., 3:] + bg_color * (1 - images[..., 3:])
+        if 'normals' in data and self.epoch > 8:
+            gt_normal = data['normals'] * alpha_mask + bg_color * (1 - alpha_mask)
             pred_normal = outputs['normal']
             loss += 0.2 * self.criterion(pred_normal, gt_normal).mean(-1) # [B, N, 3] --> [B, N]
             
         # depth loss
         if 'depths' in data and self.epoch < 8:
-            gt_depth = data['depths'] * images[..., 3:]# + bg_color[:, :, :1] * (1 - images[..., 3:])
+            gt_depth = data['depths'] * alpha_mask# + bg_color[:, :, :1] * (1 - alpha_mask)
             pred_depth = outputs['depth'].view(gt_depth.size())
             depth_loss = 0.2 * self.criterion(pred_depth, gt_depth).mean(-1) # [B, N, 1] --> [B, N]
             loss += depth_loss
@@ -591,11 +595,14 @@ class Trainer(object):
 
         if self.opt.color_space == 'linear':
             images[..., :3] = srgb_to_linear(images[..., :3])
+            
+        alpha_mask = images[..., 3:]
+        alpha_mask = (alpha_mask > 0).to(alpha_mask.dtype)
 
         # eval with fixed background color
         bg_color = 1
         if C == 4:
-            gt_rgb = images[..., :3] * images[..., 3:] + bg_color * (1 - images[..., 3:])
+            gt_rgb = images[..., :3] * alpha_mask + bg_color * (1 - alpha_mask)
         else:
             gt_rgb = images
         
@@ -674,8 +681,8 @@ class Trainer(object):
             #     self.evaluate_one_epoch(valid_loader)
             #     self.save_checkpoint(full=False, best=True)
             
-        if self.workspace is not None and self.local_rank == 0:
-            self.save_checkpoint(full=True, best=False)
+        # if self.workspace is not None and self.local_rank == 0:
+        #     self.save_checkpoint(full=True, best=False)
 
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer.close()
@@ -859,7 +866,7 @@ class Trainer(object):
         return outputs
 
     def train_one_epoch(self, loader):
-        self.log(f"==> Start Training Epoch {self.epoch}, lr={self.optimizer.param_groups[0]['lr']:.6f} ...")
+        # self.log(f"==> Start Training Epoch {self.epoch}, lr={self.optimizer.param_groups[0]['lr']:.6f} ...")
 
         total_loss = 0
         if self.local_rank == 0 and self.report_metric_at_train:
@@ -939,7 +946,7 @@ class Trainer(object):
             else:
                 self.lr_scheduler.step()
 
-        self.log(f"==> Finished Epoch {self.epoch}.")
+        self.log(f"==> Finished Epoch {self.epoch}, lr={self.optimizer.param_groups[0]['lr']:.6f}, loss={average_loss}")
 
 
     def evaluate_one_epoch(self, loader, name=None):
